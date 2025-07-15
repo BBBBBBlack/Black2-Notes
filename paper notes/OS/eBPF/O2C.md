@@ -12,7 +12,7 @@
 
 ## Design
 
-<img src=".\assets\image-20250707211346123.png" alt="image-20250707211346123" style="zoom:90%;" />
+<img src="..\..\assets\image-20250707211346123.png" alt="image-20250707211346123" style="zoom:90%;" />
 
 ### 阶段-1
 
@@ -28,7 +28,7 @@
 
 （检查的执行）
 
-<img src=".\assets\image-20250707221913087.png" alt="image-20250707221913087" style="zoom:80%;" />
+<img src="..\..\assets\image-20250707221913087.png" alt="image-20250707221913087" style="zoom:80%;" />
 
 将受攻击组件转换为分区状态：
 

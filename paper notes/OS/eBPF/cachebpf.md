@@ -1,3 +1,25 @@
+## 页面缓存（page cache）
+
+<img src="../../assets/image-20250709022427018.png" alt="image-20250709022427018" style="zoom:70%;" />
+
+当页面首次从存储中获取时，它会被添加到inactive list的尾部。如果该页面再次被访问，它会被提升到active list
+
+当驱逐被触发时，页面将从inactive list的头部被移除
+
+如有必要，页面缓存将通过将active list头部的页面降级到inactive list的尾部来平衡列表（在平衡期间，active list中已被引用的页面通常会被降级到inactive list，而不是像LRU或CLOCK算法那样给予在active list中的另一个机会。）
+
+#### cgroup（control group）
+
+一种用于控制进程资源使用的机制_每个 cgroup 代表一组进程，它可以被分配独立的资源配额（比如内存、CPU 等）
+
+* 每个cgroup维护一个active list和一个inactive list
+* 可以跨cgroup访问内存，但这种访问不会让该页面“归属”改变
+* 这些按cgroup划分的list组成了整个页缓存
+
+#### shadow entries
+
+当一个页面 从 page cache 中被驱逐时，内核会为它保留一个小的“影子信息”条目，记录这个页面的关键访问元数据（例如：最近一次被访问的时间、所在文件的偏移等）；若该被驱逐的页面短时间内被再次使用，则将其放入active list——防抖动
+
 ## Design
 
 ### interface
@@ -92,7 +114,7 @@ struct eviction_ctx {
 
 Eviction list API，使用[kfunc](https://docs.ebpf.io/linux/concepts/kfuncs/)实现
 
-<img src=".\assets\image-20250709144555328.png" alt="image-20250709144555328" style="zoom:80%;" />
+<img src="..\..\assets\image-20250709144555328.png" alt="image-20250709144555328" style="zoom:80%;" />
 
 #### Eviction Candidate Interface
 
