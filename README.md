@@ -1,9 +1,9 @@
 # Black's Notes
 
-[OS](./paper notes/OS)
+[OS](./paper%20notes/OS)
 
-​	[eBPF](./paper notes/OS/eBPF)
+​	[eBPF](./paper%20notes/OS/eBPF)
 
-​		[cachebpf](./paper notes/OS/eBPF/cachebpf.md)
+​		[cachebpf](./paper%20notes/OS/eBPF/cachebpf.md)
 
-​		[O2C](./paper notes/OS/eBPF/cachebpf.md)
+​		[O2C](./paper%20notes/OS/eBPF/cachebpf.md)
