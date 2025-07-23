@@ -38,6 +38,7 @@ eBPF程序定义的结构——用于数据存储和**共享**（eBPF-eBPF or eB
 BPF_TABLE("lru_hash", struct XFSMTableKey,  struct XFSMTableLeaf,  xfsm_table,  10000);
 // 声明数组类型的数据结构
 BPF_ARRAY(num_processed, u64, 1);		// 处理的包的数量
+
 // 决策树的参数
 BPF_ARRAY(all_features, s64, 12);		// 特征数据
 BPF_ARRAY(children_left, s64, 123);		// 决策树中，每个节点的左子节点的相关数据
