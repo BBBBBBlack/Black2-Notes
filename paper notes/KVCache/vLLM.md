@@ -6,7 +6,7 @@
 
 *   输入输出的长度不确定
 
-*   浪费的三部分内存![\<img alt="image-20241030233656584" data-..\attachment-key="EJ24XP5P" width="1626" height="292" src="..\attachments/EJ24XP5P.png" ztype="zimage">](..\attachments/EJ24XP5P.png)
+*   浪费的三部分内存![\<img alt="image-20241030233656584" data-../attachment-key="EJ24XP5P" width="1626" height="292" src="../attachments/EJ24XP5P.png" ztype="zimage">](../attachments/EJ24XP5P.png)
 
     *   为未来生成tokens保留的slots
     *   预分配的空间大小大于实际生成序列KV Cache存储的空间大小导致的内部碎片
@@ -18,7 +18,7 @@
 
 将每个sequence的KV Cache划分为KV blocks,每个block包含固定数量tokens的KV向量（block可以不用连续存储）
 
-![\<img alt="image-20241030235746404" data-..\attachment-key="5DV3PT3F" width="1100" height="578" src="..\attachments/5DV3PT3F.png" ztype="zimage">](..\attachments/5DV3PT3F.png)
+![\<img alt="image-20241030235746404" data-../attachment-key="5DV3PT3F" width="1100" height="578" src="../attachments/5DV3PT3F.png" ztype="zimage">](../attachments/5DV3PT3F.png)
 
 ### 不同应用
 
@@ -82,7 +82,7 @@ serving throughput服务吞吐量
 
 normalized latency——每个请求的端到端延迟的平均值/其输出长度
 
-![\<img alt="image-20241112033037388" data-..\attachment-key="KKI3FABK" width="1004" height="407" src="..\attachments/KKI3FABK.png" ztype="zimage">](..\attachments/KKI3FABK.png)
+![\<img alt="image-20241112033037388" data-../attachment-key="KKI3FABK" width="1004" height="407" src="../attachments/KKI3FABK.png" ztype="zimage">](../attachments/KKI3FABK.png)
 
 *   共享前缀共享一次前缀时，vLLM的吞吐量比Orca （Oracle）高1.67倍此外，当共享更多的示例时， vLLM的吞吐量比Orca （Oracle）高3.58倍
 

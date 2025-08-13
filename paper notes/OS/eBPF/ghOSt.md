@@ -64,11 +64,24 @@ agents收到内核的消息和状态字后，如何指示内核调度哪个线�
 
 （自定义API，底层是共享内存）
 
-<img src="..\..\assets\image-20250723162506538.png" alt="image-20250723162506538" style="zoom:65%;" />
+* per-CPU model
 
-* TXN_CREATE()：agent在共享内存中打开一个新事务
-* 写入要调度的线程的 TID 以及要在其上调度线程的 CPU 的 ID（per-CPU model中只调度agent自己的CPU）
-* 事务写入完成后，通过 TXNS_COMMIT() 系统调用将其提交到内核
+  <img src="..\..\assets\image-20250723162506538.png" alt="image-20250723162506538" style="zoom:65%;" />
+
+  * TXN_CREATE()：agent在共享内存中打开一个新事务
+
+  * 写入要调度的线程的 TID 以及要在其上调度线程的 CPU 的 ID（per-CPU model中只调度agent自己的CPU）
+
+  * 事务写入完成后，通过 TXNS_COMMIT() 系统调用将其提交到内核
+
+
+* centralized model
+
+  <img src="..\..\assets\image-20250724011243434.png" alt="image-20250724011243434" style="zoom:50%;" />
+
+  * 避免抢占全局agent——全局agent线程的优先级最高
+
+    当一个非ghOSt thread要在全局agent所在CPU上运行时，全局agent唤醒一块空闲CPU的agent作为全局agent，
 
 ###### Group commits
 
@@ -76,14 +89,29 @@ agents收到内核的消息和状态字后，如何指示内核调度哪个线�
 
 通过批量中断，分摊发送中断的开销
 
-###### 序列号使用（per-CPU）
+###### 序列号使用
 
-面临问题：如果在 agent 还在运行调度逻辑的同时，新的消息（对应一个更高优先级的线程）被写入该 CPU 的消息队列。agent 提交当前事务后就让出 CPU，新的高优先级线程就错过了本该被立即调度的时机
+* per-CPU model
 
-解决：
+  面临问题：如果在 agent 还在运行调度逻辑的同时，新的消息（对应一个更高优先级的线程）被写入该 CPU 的消息队列。agent 提交当前事务后就让出 CPU，新的高优先级线程就错过了本该被立即调度的时机
 
-* agent检查共享内存中的状态字获取`A_seq`，并从队列中读取消息
-* 根据消息做出调度决策
-* 将事务和之前获取的`A_seq`一起commit
-* 若commit的`A_seq`比当前的`A_seq`旧（在commit之前，队列又向agent发送了新消息），则该事务被视为“过时”，失败并返回 ESTALE 错误
-* agent清空其队列以检索更新的消息
+  解决：
+
+  * agent检查共享内存中的状态字获取`A_seq`，并从队列中读取消息
+
+  * 根据消息做出调度决策
+
+  * 将事务和之前获取的`A_seq`一起commit
+
+  * 若commit的`A_seq`比当前的`A_seq`旧（在commit之前，队列又向agent发送了新消息），则该事务被视为“过时”，失败并返回 ESTALE 错误
+
+  * agent清空其队列以检索更新的消息
+
+* centralized model
+  * 每个排队的消息都用线程序列号`Tseq`标记为`（MT，Tseq）`
+  * 将事务和之前标记的`T_seq`一起commit
+  * 若commit的`T_seq`比当前的`T_seq`旧，事务将失败，并出现ESTALE错误
+
+## 安全性
+
+待续……
