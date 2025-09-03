@@ -2,6 +2,11 @@
 
 ![image-20250723133846403](../../assets/image-20250723133846403.png)
 
+* ghOSt agents：在用户空间做出调度决策，指示内核如何在CPU上调度本机线程
+* ghOSt scheduling class：为用户空间提供API实现调度策略
+* 内核态通过Status words和Messages向ghOSt agents公开线程状态
+* ghOSt agents通过Transactions和Syscalls指示内核如何在CPU上调度本机线程
+
 <img src="..\..\assets\image-20250723134905971.png" alt="image-20250723134905971" style="zoom:80%;" />
 
 * ghOSt中每个CPU有一个本地agent，每个代理负责其自身CPU的线程调度决策
@@ -114,4 +119,7 @@ agents收到内核的消息和状态字后，如何指示内核调度哪个线�
 
 ## 安全性
 
-待续……
+防止ghOSt策略出bug，对其他的系统进程造成影响：
+
+* 将ghOSt的优先级设置为低于CFS默认调度类的优先级——大多数进程都可以抢占ghOSt进程
+* ghOSt线程被抢占会导致创建thread_PREEMPT消息，触发相关代理做出调度决策
