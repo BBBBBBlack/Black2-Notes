@@ -109,3 +109,10 @@ Kronecker powerlaw graph（幂律图）——一种结构很不均匀的图结�
 * Cluster Manger启动Worker Node上的Executor
 * 将作业（一系列的任务）发送给Worker Node执行
 * 执行结束后Worker Node将结果返回给Driver或写入文件系统HDFS
+
+##### SPEC95 wave
+
+<img src="..\assets\image-20250821014132261.png" alt="image-20250821014132261" style="zoom:40%;" />
+
+* 启动阶段（70亿条指令）：初始化数据结构，为后续执行做准备
+* 执行阶段：有周期性行为
