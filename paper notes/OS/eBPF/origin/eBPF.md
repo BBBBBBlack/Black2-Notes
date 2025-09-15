@@ -62,15 +62,15 @@ eBPF 与用户空间之间交换数据的“共享容器”，驻留在内核中
 
 内核事件触发器
 
-|            hook 类型             |             描述              |            常见用途             |
-| :------------------------------: | :---------------------------: | :-----------------------------: |
-|          **Tracepoint**          |      内核预定义的事件点       |   性能分析、追踪函数入口/退出   |
-|       **kprobe/kretprobe**       |  任意内核函数的入口或返回点   |     系统调用监控、行为审计      |
-|   **XDP（eXpress Data Path）**   |  网络包到达网卡时的早期 hook  | DDoS 防护、负载均衡、数据包过滤 |
-|    **TC（Traffic Control）**     | 网络数据包在 socket 层的 hook |     QoS、延迟优化、流量控制     |
-| **LSM（Linux Security Module）** |         安全策略 hook         |   强化访问控制（如 bpf-lsm）    |
-|         **cgroup hook**          |      控制组的资源访问点       |   限制特定进程网络、内存行为    |
-|       **Uprobe/Uretprobe**       |  用户空间程序函数的入口/返回  |       分析用户态程序行为        |
+|                          hook 类型                           |             描述              |            常见用途             |
+| :----------------------------------------------------------: | :---------------------------: | :-----------------------------: |
+|                        **Tracepoint**                        |      内核预定义的事件点       |   性能分析、追踪函数入口/退出   |
+| **[kprobe/kretprobe](https://sourcegraph.com/github.com/torvalds/linux/-/blob/Documentation/trace/kprobes.rst)** |  任意内核函数的入口或返回点   |     系统调用监控、行为审计      |
+|                 **XDP（eXpress Data Path）**                 |  网络包到达网卡时的早期 hook  | DDoS 防护、负载均衡、数据包过滤 |
+|                  **TC（Traffic Control）**                   | 网络数据包在 socket 层的 hook |     QoS、延迟优化、流量控制     |
+|               **LSM（Linux Security Module）**               |         安全策略 hook         |   强化访问控制（如 bpf-lsm）    |
+|                       **cgroup hook**                        |      控制组的资源访问点       |   限制特定进程网络、内存行为    |
+|                     **Uprobe/Uretprobe**                     |  用户空间程序函数的入口/返回  |       分析用户态程序行为        |
 
 #### helper
 

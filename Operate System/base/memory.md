@@ -1,12 +1,12 @@
 # C++程序内存分布
 
-<img src=".\assets\3033909-20230813232748652-946950330.png" alt="image" style="zoom:60%;" />
+<img src=".\assets\3033909-20230813232748652-946950330.png" alt="image" style="zoom:70%;" />
 
 **栈（stack）**
 
 用于实现函数调用。由编译器自动分配释放，存放函数的参数值和局部变量
 
-<img src=".\assets\v2-3cf83ebfecd29f8dcc5ed62db2002d52_1440w.jpg" alt="img" style="zoom:32%;" />
+<img src=".\assets\v2-3cf83ebfecd29f8dcc5ed62db2002d52_1440w.jpg" alt="img" style="zoom:40%;" />
 
 **堆（heap）**
 
@@ -85,5 +85,48 @@ mmap：不在堆上操作，向内核申请一块独立的、不与堆相连的�
 
 CPU被划分为多个节点(node)，内存则被分簇(bank)，一个CPU-node对应一个内存簇bank，即每个内存簇被认为是一个node（内核中表示为`pg_data_t`的实例）
 
-每个物理内存节点node被划分为多个内存管理区域zone（一个zone通过`struct zone_struct`描述）
+每个物理内存节点node被划分为多个内存管理区域zone（一个zone通过`struct zone_struct`描述），Linux内核对不同zone的内存采用不同的管理方式和映射方式
 
+|  管理内存域  |                             描述                             |
+| :----------: | :----------------------------------------------------------: |
+|   ZONE_DMA   | 标记了适合DMA的内存域. 该区域的长度依赖于处理器类型. 这是由于古老的ISA设备强加的边界. 但是为了兼容性, 现代的计算机也可能受此影响 |
+|  ZONE_DMA32  | 标记了使用32位地址字可寻址, 适合DMA的内存域. 显然, 只有在53位系统中ZONE_DMA32才和ZONE_DMA有区别, 在32位系统中, 本区域是空的, 即长度为0MB, 在Alpha和AMD64系统上, 该内存的长度可能是从0到4GB |
+| ZONE_NORMAL  | 标记了可直接映射到内存段的普通内存域. 这是在所有体系结构上保证会存在的唯一内存区域, 但无法保证该地址范围对应了实际的物理地址. 例如, 如果AMD64系统只有两2G内存, 那么所有的内存都属于ZONE_DMA32范围, 而ZONE_NORMAL则为空 |
+| ZONE_HIGHMEM | 标记了超出内核虚拟地址空间的物理内存段, 因此这段地址不能被内核直接映射 |
+| ZONE_MOVABLE | 内核定义了一个伪内存域ZONE_MOVABLE, 在防止物理内存碎片的机制memory migration中需要使用该内存域. 供防止物理内存碎片的极致使用 |
+| ZONE_DEVICE  |   为支持热插拔设备而分配的Non Volatile Memory非易失性内存    |
+| MAX_NR_ZONES | 充当结束标记, 在内核中想要迭代系统中所有内存域, 会用到该常量 |
+
+#### 物理内存区域划分
+
+|    **类型**    |  **物理地址范围**  |            **用途**            |
+| :------------: | :----------------: | :----------------------------: |
+|   `ZONE_DMA`   |       0~16MB       | 供DMA设备使用（如磁盘、网卡）  |
+| `ZONE_NORMAL`  |     16MB~896MB     |   内核直接映射区（线性映射）   |
+| `ZONE_HIGHMEM` | 896MB~物理内存结束 | 动态分配（用户空间、特殊映射） |
+
+* 页表主要存放于`ZONE_NORMAL`，通过直接映射获得
+  * 临时映射使用 `kmap()`/`kunmap()`——页表映射机制的一个具体应用场景，通过在内核自己的页表中创建一个临时的页表项来实现
+* `ZONE_HIGHMEM`通过页表映射被访问
+
+#### 物理内存分配
+
+当一个内存分配请求（例如 `alloc_pages()`）发生page fault时，内核首先会根据请求的**GFP标志**（Get Free Pages flags，如 `GFP_KERNEL`, `GFP_DMA`）来决定优先从哪个Zone分配
+
+在该Zone的内部执行Buddy算法
+
+##### Buddy System
+
+<img src=".\assets\1e3c3f7434d6c4c9ea6f57717bf1a0d4.png" alt="img" style="zoom:90%;" />
+
+* 按照空闲内存块的长度，把内存挂载到不同长度的 freelist 链表中。freelist 的长度是以 (2^order x Page) 来递增的，即 1 page、2 page、4 page … 2^n，通常情况下最大 order 为10 对应的空闲内存大小为 4M bytes
+* 在分配时，如果一个空闲块的大小不能被任一长度整除，它就将一个Page分出这块空闲块的大小，剩余的部分从大到小逐个分解成多个 (2^order x Page) Page。挂载到对应order的free list中
+* 在释放时，首先把内存释放到对应长度的链表中，随后看看和该内存大小相同、地址相邻的兄弟块(Buddy)是不是free的，如果可以和 buddy 块合并成一个大块挂载到更高一阶的链表，在挂载的时候继续尝试合并
+
+buddy算法解决了页框颗粒度的碎片，但用户日常使用一般申请的内存大都是几十、顶多几百byte，直接分配4KB太大了，需要进一步把4KB的页框内存细分，以满足更小颗粒度的需求，slab算法由此诞生
+
+
+
+##### SLAB
+
+<img src=".\assets\2052730-20211218215042609-1084584328.png" alt="img" style="zoom:30%;" />
