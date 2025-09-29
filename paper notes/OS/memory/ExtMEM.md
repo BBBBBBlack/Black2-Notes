@@ -89,30 +89,86 @@ EXEMEM管理其绑定的应用程序在本地和远程（如NVMe SSD）上的后
     
     * faulting thread触发page fault，由用户态切换至内核态
     
-    * 内核调用了 `handle_userfault` 交给 userfaultfd 相关的代码进行处理，向引发 该page fault 的faulting thread发送一个 SIGBUS 信号
+    * 内核调用了 `handle_userfault` 交给 userfaultfd 相关的代码进行处理，向引发该page fault 的faulting thread的私有待处理队列发送一个 SIGBUS 信号
     
-    * 内核在faulting thread设置新的执行上下文
+    * 当faulting thread即将从内核态返回用户态时，读取待处理队列中的SIGBUS信号
+    
+    * 调用`handle_signal`函数，构建信号帧 (`setup_rt_frame`)
+    
+      * 在故障线程的**用户态栈**上创建一个包含完整寄存器上下文和 `siginfo_t` 信息的**信号帧**
+    
+      * 修改保存在内核中的返回上下文
+    
+      * 将返回地址（`regs->ip`）修改为 `upcall handler` 的地址，并将栈指针（`regs->sp`）指向刚刚创建的信号帧
+    
     
       ```c
-      // 内核内部操作（简化表示）
-      void kernel_setup_upcall_context(struct task_struct *task, void (*handler)()) {
-          struct pt_regs *regs = task_pt_regs(task);
-          
-          // 在用户栈上保存当前状态
-          unsigned long sp = regs->sp - sizeof(struct sigframe);
-          struct sigframe *frame = (struct sigframe *)sp;
-          
-          // 保存原始执行状态
-          frame->original_ip = regs->ip;     // 保存出错的指令地址
-          frame->original_sp = regs->sp;     // 保存原始栈指针  
-          frame->original_regs = *regs;      // 保存所有寄存器
-          
-          // 设置新的执行上下文
-          regs->ip = (unsigned long)handler; // 指令指针指向处理函数
-          regs->sp = sp;                     // 更新栈指针
-          regs->di = fault_address;          // 第一个参数：出错地址
-          
-          // 当线程返回用户态时，会从handler函数开始执行
+      static int __setup_rt_frame(int sig, struct ksignal *ksig,
+      			    sigset_t *set, struct pt_regs *regs)
+      {
+      	struct rt_sigframe __user *frame;
+      	void __user *restorer;
+      	void __user *fp = NULL;
+      
+          // 在当前线程的用户态栈上计算出一个安全的位置，用来存放即将创建的“信号帧”
+      	frame = get_sigframe(&ksig->ka, regs, sizeof(*frame), &fp);
+      
+      	if (!user_access_begin(frame, sizeof(*frame)))
+      		return -EFAULT;
+      
+      	unsafe_put_user(sig, &frame->sig, Efault);
+      	unsafe_put_user(&frame->info, &frame->pinfo, Efault);
+      	unsafe_put_user(&frame->uc, &frame->puc, Efault);
+      
+      	/* Create the ucontext.  */
+      	if (static_cpu_has(X86_FEATURE_XSAVE))
+      		unsafe_put_user(UC_FP_XSTATE, &frame->uc.uc_flags, Efault);
+      	else
+      		unsafe_put_user(0, &frame->uc.uc_flags, Efault);
+      	unsafe_put_user(0, &frame->uc.uc_link, Efault);
+      	unsafe_save_altstack(&frame->uc.uc_stack, regs->sp, Efault);
+      
+      	/* Set up to return from userspace.  */
+      	restorer = current->mm->context.vdso +
+      		vdso_image_32.sym___kernel_rt_sigreturn;
+      	if (ksig->ka.sa.sa_flags & SA_RESTORER)
+      		restorer = ksig->ka.sa.sa_restorer;
+      	unsafe_put_user(restorer, &frame->pretcode, Efault);
+      
+      	/*
+      	 * This is movl $__NR_rt_sigreturn, %ax ; int $0x80
+      	 *
+      	 * WE DO NOT USE IT ANY MORE! It's only left here for historical
+      	 * reasons and because gdb uses it as a signature to notice
+      	 * signal handler stack frames.
+      	 */
+          // 将完整的上下文信息（包括所有寄存器的值、siginfo_t 等）拷贝到刚刚计算出的用户态栈地址上
+      	unsafe_put_user(*((u64 *)&rt_retcode), (u64 *)frame->retcode, Efault);
+      	unsafe_put_sigcontext(&frame->uc.uc_mcontext, fp, regs, set, Efault);
+      	unsafe_put_sigmask(set, frame, Efault);
+      	user_access_end();
+      	
+      	if (copy_siginfo_to_user(&frame->info, &ksig->info))
+      		return -EFAULT;
+      
+      	/* Set up registers for signal handler */
+          // 将栈顶指针，指向刚刚在用户态栈上创建的那个信号帧！！！！！！！！！！！
+      	regs->sp = (unsigned long)frame;
+          // 将下一条要执行的指令地址，强行设置为信号处理函数的地址！！！！！！！！
+      	regs->ip = (unsigned long)ksig->ka.sa.sa_handler;
+      	regs->ax = (unsigned long)sig;
+      	regs->dx = (unsigned long)&frame->info;
+      	regs->cx = (unsigned long)&frame->uc;
+      
+      	regs->ds = __USER_DS;
+      	regs->es = __USER_DS;
+      	regs->ss = __USER_DS;
+      	regs->cs = __USER_CS;
+      
+      	return 0;
+      Efault:
+      	user_access_end();
+      	return -EFAULT;
       }
       ```
     
@@ -152,11 +208,38 @@ EXEMEM管理其绑定的应用程序在本地和远程（如NVMe SSD）上的后
 跟踪内存访问，以区分经常访问（热）和不常访问（冷）数据
 
 * page fault的故障地址
-* MMU访问和脏位
-* 硬件计数器
+
+* MMU访问位和脏位
+
+  ```c
+  uint64_t pt_get_bits(struct user_page *page)
+  {
+    uint64_t ret;
+    struct uffdio_page_flags page_flags;
+  
+    page_flags.va = page->va;
+    assert(page_flags.va % PAGE_SIZE == 0);
+    page_flags.flag1 = PT_ACCESSED_FLAG;
+    page_flags.flag2 = PT_DIRTY_FLAG;
+  
+    if (ret = ioctl(uffd, UFFDIO_GET_FLAG, &page_flags) < 0) {
+      fprintf(stderr, "userfaultfd_get_flag returned < 0\n");
+      assert(0);
+    }
+    ret = page_flags.res1 | page_flags.res2;
+    
+    return ret;
+  }
+  ```
+
+* 硬件计数器****
 
 ## Policy Layer
 
 Core Layer的handler调用，能够自定义策略：识别需要驱逐或降级的冷页，并选择潜在的页面进行预取或promotion
 
 [ExtMem/src at master · SepehrDV2/ExtMem](https://github.com/SepehrDV2/ExtMem/tree/master/src)
+
+* upcall原本的实现
+* EXTMEM版upcall比IPC好在哪里
+* 
