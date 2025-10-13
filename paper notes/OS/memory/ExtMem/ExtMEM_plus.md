@@ -1,16 +1,16 @@
-![image-20250929021240941](..\..\assets\image-20250929021240941.png)
+<img src="..\..\..\assets\image-20250929021240941.png" alt="image-20250929021240941" style="zoom:25%;" />
 
-![image-20250929021332626](..\..\assets\image-20250929021332626.png)
+<img src="..\..\..\assets\image-20250929021332626.png" alt="image-20250929021332626" style="zoom:25%;" />
 
 首先，在google和Meta的报告中都指出内存很昂贵
 
-![image-20250929021436605](..\..\assets\image-20250929021436605.png)
+<img src="..\..\..\assets\image-20250929021436605.png" alt="image-20250929021436605" style="zoom:25%;" />
 
 并且，各种类型的应用程序需要大量的内存
 
 不同程序有不同的内存使用方式（图处理：稀疏且高度随机的指针追逐；ML模型：密集的、流式顺序访问；Database：混合模式）
 
-![image-20250929021600045](..\..\assets\image-20250929021600045.png)
+<img src="..\..\..\assets\image-20250929021600045.png" alt="image-20250929021600045" style="zoom:25%;" />
 
 为了减少内存消耗，数据中心的运营商使用了许多技术
 
@@ -18,11 +18,11 @@
 
 内存分解将内存资源从计算服务器中物理分离，并通过高速网络将其汇集成一个共享资源池；服务器可以按需从远端的资源池中获取内存（解决单台服务器内存浪费或不足）
 
-另一种方法是使用加速器，
+另一种方法是使用加速器，用专门的硬件分担CPU在网络和存储I/O等任务上的负载（ **Intel VT-d (Virtualization Technology for Directed I/O)** 等技术允许虚拟机直接访问硬件设备（如网卡），绕过hypervisor的软件模拟层，显著降低了I/O延迟）
 
 而内存管理策略需要针对特定的硬件，和在硬件上运行的应用程序进行定制
 
-![image-20250929021701256](..\..\assets\image-20250929021701256.png)
+<img src="..\..\..\assets\image-20250929021701256.png" alt="image-20250929021701256" style="zoom:25%;" />
 
 所以，总体的问题是，当前的内存管理策略不足以应对以上说的多种硬件结构、多种应用程序的复杂情况
 
@@ -34,107 +34,120 @@
 
 所以，这篇论文提出一个解决方案：它能够让定制不同的内存管理策略变得容易，同时，将它的开销维持在和在linux内核中的策略同一水平
 
-![image-20250929021845104](..\..\assets\image-20250929021845104.png)
+<img src="..\..\..\assets\image-20250929021845104.png" alt="image-20250929021845104" style="zoom:25%;" />
 
 这篇论文实现了ExtMem框架，它运行在用户态，允许用户在用户态实现自定义的内存管理策略
 
-![image-20250929021755143](..\..\assets\image-20250929021755143.png)
+<img src="..\..\..\assets\image-20250929021755143.png" alt="image-20250929021755143" style="zoom:25%;" />
 
 EXTMEM被设计为一个动态链接库，可以被动态地加载到应用程序地址空间中
 
 ExtMem有三个组件
 
-![image-20250929021927081](..\..\assets\image-20250929021927081.png)
+<img src="..\..\..\assets\image-20250929021927081.png" alt="image-20250929021927081" style="zoom:25%;" />
 
 Core Layer：负责管理内存状态，并与内核交互
 
-![image-20250929022005150](..\..\assets\image-20250929022005150.png)
+<img src="..\..\..\assets\image-20250929022005150.png" alt="image-20250929022005150" style="zoom:25%;" />
 
 Observability Layer：负责收集用户自定义策略所需的数据
 
-![image-20250929022129963](..\..\assets\image-20250929022129963.png)
+<img src="..\..\..\assets\image-20250929022129963.png" alt="image-20250929022129963" style="zoom:25%;" />
 
-Policy Layer：向用户态开放API，以实现替换、预取等内存管理策略（**哪些API？？为什么这些涉及内核操作的API可以在应用层使用？**）
+Policy Layer：向用户态开放API，以实现替换、预取等内存管理策略
 
-![image-20250929022220087](..\..\assets\image-20250929022220087.png)
+<img src="..\..\..\assets\image-20250929022220087.png" alt="image-20250929022220087" style="zoom:25%;" />
 
 core layer：每当应用程序进行内存系统调用（比如mmap、munmap、madvise），core layer拦截这些调用，记录内存状态并调用Policy Layer的策略做出决策后，通过一系列**真正的内存系统调用**与 Linux 内核进行底层交互，以执行该决策
 
 （内存状态”指的是 `ExtMem` 自己维护的一套数据结构，用来追踪每个内存页的详细信息）
 
-**（syscall_interupt、libc patching？？）**
+**（syscall_interupt、libc patching——LD_PRELOAD）**
 
-**（mmap、munmap、madvise？？）**
+（mmap——在调用进程的虚拟地址空间中创建一个新的内存映射
 
-![image-20250929022300160](..\..\assets\image-20250929022300160.png)
+munmap——删除指定地址范围内的内存映射
+
+madvise——向内核提供关于一块内存区域未来使用模式的建议或提示）
+
+<img src="..\..\..\assets\image-20250929022300160.png" alt="image-20250929022300160" style="zoom:25%;" />
 
 Extmem为了让用户能在用户态实现自定义策略，必须将内存页的状态从内核态传递到用户态
 
 以前的工作基于userfaultfd的机制，将page pault转发给用户态程序处理：
 
-![image-20250929022356301](..\..\assets\image-20250929022356301.png)
+<img src="..\..\..\assets\image-20250929022356301.png" alt="image-20250929022356301" style="zoom:25%;" />
 
-首先，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd，返回一个该内存区域的文件描述符**（什么是文件描述符，包含什么内容？？）**
+首先，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd
 
-此时，user fault endpoint——也就是处理page fault的线程，（通过 `poll` 系统调用）监听这个文件描述符，等待新的page fault发生
+（Core Layer 调用 `userfaultfd()`，从内核获取一个代表 `userfaultfd` 服务本身的文件描述符（`uffd`），Core Layer 接着使用这个 `uffd`，通过 `ioctl` 命令，将刚刚 `mmap` 的那块内存区域**注册**到这个服务中去）
 
-![image-20250929022512601](..\..\assets\image-20250929022512601.png)
+此时，user fault endpoint——也就是处理page fault的线程，（通过 `poll` 系统调用）监听userfaultfd的消息队列，等待新的page fault发生
+
+<img src="..\..\..\assets\image-20250929022512601.png" alt="image-20250929022512601" style="zoom:25%;" />
 
 而应用程序之前的mmap操作，只是在进程的**虚拟地址空间**中预留了一段连续的地址范围，**但没有为它分配任何实际的物理内存**
 
 当应用程序对这块mmap分配的虚拟地址空间进行读写操作时，由于没有映射到物理地址空间，会发生page fault，应用程序由用户态转入内核态
 
-![image-20250929022602458](..\..\assets\image-20250929022602458.png)
+<img src="..\..\..\assets\image-20250929022602458.png" alt="image-20250929022602458" style="zoom:25%;" />
 
 内核将这次缺页的关键信息，如**故障地址**、是**读缺页还是写缺页**打包成一个msg，送入userfaultfd的消息队列中
 
 然后阻塞应用程序进程
 
-![image-20250929022645591](..\..\assets\image-20250929022645591.png)
+<img src="..\..\..\assets\image-20250929022645591.png" alt="image-20250929022645591" style="zoom:25%;" />
 
-![image-20250929022721792](..\..\assets\image-20250929022721792.png)
+<img src="..\..\..\assets\image-20250929022721792.png" alt="image-20250929022721792" style="zoom:25%;" />
 
 user fault endpoint(Handler thread)从消息队列中取出msg，对其进行处理
 
-![image-20250929022816607](..\..\assets\image-20250929022816607.png)
+<img src="..\..\..\assets\image-20250929022816607.png" alt="image-20250929022816607" style="zoom:25%;" />
 
 待其处理完毕，唤醒应用程序进程继续运行
 
-faulting thread和hamdler thread构成IPC机制
+faulting thread和handler thread构成IPC机制
 
 一个 handler 线程处理所有缺页，在高并发下会成为瓶颈；若采用多个handler，userfaultfd只有一个消息队列，所有handler对其加锁读，无法发挥handler并发优势
 
-![image-20250929023001191](..\..\assets\image-20250929023001191.png)
+<img src="..\..\..\assets\image-20250929023001191.png" alt="image-20250929023001191" style="zoom:25%;" />
 
-![image-20250929023125155](..\..\assets\image-20250929023125155.png)
+<img src="..\..\..\assets\image-20250929023125155.png" alt="image-20250929023125155" style="zoom:25%;" />
 
 首先，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd，同时，为该进程注册一个upcall handler
 
 每当应用程序触发page fault，该fault都会转发到同一进程的用户态
 
-![image-20250929023208170](..\..\assets\image-20250929023208170.png)
+<img src="..\..\..\assets\image-20250929023208170.png" alt="image-20250929023208170" style="zoom:25%;" />
 
 由upcall handler进行处理
 
-![image-20250929023247777](..\..\assets\image-20250929023247777.png)
+<img src="..\..\..\assets\image-20250929023247777.png" alt="image-20250929023247777" style="zoom:25%;" />
 
 处理完返回应用程序继续执行
 
-![image-20250929023333471](..\..\assets\image-20250929023333471.png)
+<img src="..\..\..\assets\image-20250929023333471.png" alt="image-20250929023333471" style="zoom:25%;" />
 
-![image-20250929023413115](..\..\assets\image-20250929023413115.png)
+<img src="..\..\..\assets\image-20250929023413115.png" alt="image-20250929023413115" style="zoom:25%;" />
 
-**（hardware是怎么做到的？？）**
+* page fault的故障地址
 
-![image-20250929023454459](..\..\assets\image-20250929023454459.png)
+* MMU访问位和脏位
 
-![image-20250929023531812](..\..\assets\image-20250929023531812.png)
+* Hardware Counter (硬件计数器) 
+  * 位于 CPU 核心中的一组特殊寄存器。它们由一个称为 **PMU (Performance Monitoring Unit, 性能监控单元)** 的硬件子系统管理
+  * Observability Layer 会**定期地**读取 PMU 中这些计数器的值（执行了多少条指令、发生了多少次缓存未命中 (Cache Misses)、内存带宽的使用情况等）
+
+
+<img src="..\..\..\assets\image-20250929023454459.png" alt="image-20250929023454459" style="zoom:25%;" />
+
+<img src="..\..\..\assets\image-20250929023531812.png" alt="image-20250929023531812" style="zoom:25%;" />
 
 关于ExtMem的性能评估，列出了四个问题（这里主要说明第一个和第四个）
 
 首先，是否ExtMem实现的upcall机制比userfaultfd要好？
 
-![image-20250929023723575](..\..\assets\image-20250929023723575.png)
+<img src="..\..\..\assets\image-20250929023723575.png" alt="image-20250929023723575" style="zoom:25%;" />
 
 
 
@@ -142,29 +155,32 @@ faulting thread和hamdler thread构成IPC机制
 
 由于usefaultfd故障处理路径中的往返IPC，ExtMem的延迟明显比userfaultfd的延迟低
 
-![image-20250929024814983](..\..\assets\image-20250929024814983.png)
+<img src="..\..\..\assets\image-20250929024814983.png" alt="image-20250929024814983" style="zoom:25%;" />
 
 接着，使用不同数量的线程持续访问新分配的内存区域中的页面，记录在多线程并发环境下解决单个page fault的平均延迟
 
 由于userfaultfd的待处理队列的读取需要上锁，不能进行并发的读取，发现随着线程数量的增多，ExtMem的延迟明显低于userfaultfd，且差距越来越大
 
-![image-20250929025007894](..\..\assets\image-20250929025007894.png)
+<img src="..\..\..\assets\image-20250929025007894.png" alt="image-20250929025007894" style="zoom:25%;" />
 
 第二个要说明的问题是，ExtMem是否能改善应用程序的性能？
 
 论文运行了一个大规模的图处理程序PageRank
 
+* 计算图中每个顶点重要性——反复迭代，根据邻居节点的值来更新每个节点自身的Rank值，直到所有节点的Rank值收敛稳定
+* 当一个顶点被访问时，其相邻顶点档大概率被访问
+
 它由顶点数组和边数组两个数组组成
 
-顶点数组比较小，主要存放热数据（顶点属性，指向该顶点的所有出边）
+顶点数组：当前index顶点指向边数组中 该顶点自身的邻居顶点列表 的起始位置
 
-边数组比较大，数据一般只会被访问一次
+边数组：按index存放每个顶点的邻居顶点列表
 
-![image-20250929025040273](..\..\assets\image-20250929025040273.png)
+<img src="..\..\..\assets\image-20250929025040273.png" alt="image-20250929025040273" style="zoom:25%;" />
 
 将内存限制在总图大小的50%
 
-![image-20250929025205339](..\..\assets\image-20250929025205339.png)
+<img src="..\..\..\assets\image-20250929025205339.png" alt="image-20250929025205339" style="zoom:25%;" />
 
 使用与Linux（EXTMEM-2QLRU）几乎相同的算法的EXTMEM会产生适度的改进
 
@@ -181,3 +197,9 @@ faulting thread和hamdler thread构成IPC机制
     （从自己的LRU 链表的末尾取出一个页面）
 
 但当我们部署自定义算法（EXTMEM-PR）时，我们获得了超过2倍的加速
+
+EXTMEM-PR
+
+**2Q-LRU**
+
+<img src="../../../assets/image-20250709022427018.png" alt="image-20250709022427018" style="zoom:70%;" />

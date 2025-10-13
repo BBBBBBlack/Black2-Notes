@@ -15,14 +15,41 @@ EXEMEM管理其绑定的应用程序在本地和远程（如NVMe SSD）上的后
 
 * EXEMEM拦截用户代码的`mmap`等系统调用（在进程的**虚拟地址空间**中预留了一段连续的地址范围，**但没有为它分配任何实际的物理内存** ）
 * 将应用程序用到的内存区域注册/注销到userfaultfd
+  * 与mmap的其他区别：
+    * 强制私有映射——强制所有内存都成为私有映射，不处理共享内存的复杂同步问题；强制匿名映射——确保这块内存是匿名的、由程序自己使用的内存；强制不预留交换空间——EXTMEM将完全接管自己的交换逻辑
+
+    * 移除内核预填充，调用自定义预填充
+
+    * 调用 `policy_ack_vma` 函数，告知policy layer此内存的存在
 
 * 当出现page fault时（当虚拟地址无法转换为物理地址，就会立刻触发一个**缺页异常 (Page Fault)**），userfaultfd将错误转发给EXTMEM处理
+
+管理的内存状态：
+
+* 一个虚拟地址是否被 EXTMEM 系统所追踪
+
+  ```c
+  struct user_page* find_page(uint64_t va)
+  {
+    struct user_page *page;
+    pthread_mutex_lock(&pages_lock);
+    HASH_FIND(hh, pages, &va, sizeof(uint64_t), page);
+    pthread_mutex_unlock(&pages_lock);
+    return page;
+  }
+  ```
+
+* 页面的数据当前存放在DRAM还是磁盘
+
+* 页面是否正在被操作
+
+* 
 
 ### userfaultfd
 
 使用进程间通信（IPC）将错误转发给用户态程序——Linux
 
-<img src="..\..\assets\image-20250806231205140.png" alt="image-20250806231205140" style="zoom:70%;" />
+<img src="..\..\..\assets\image-20250806231205140.png" alt="image-20250806231205140" style="zoom:70%;" />
 
 * 应用程序向内核注册一个内存区域并接收一个**文件描述符fd**
 * 处理线程Handler thread（处理故障的线程）调用 select/poll监听fd
@@ -51,11 +78,23 @@ EXEMEM管理其绑定的应用程序在本地和远程（如NVMe SSD）上的后
 
 * 一个 handler 线程处理所有缺页，在高并发下会成为瓶颈；若采用多个handler，userfaultfd只有一个消息队列，所有handler对其加锁读，无法发挥handler并发优势
 
-<img src="..\..\assets\flow.png" alt="img" style="zoom:50%;" />
+<img src="..\..\..\assets\flow.png" alt="img" style="zoom:50%;" />
 
 ### upcall
 
-使用信号处理路径signing handling将错误转发给用户态程序——Linux仿造exokernel的upcall机制
+当一个线程发生页错误时，内核会捕获这个错误，在出错线程自己的用户态栈上设置好上下文，然后将控制权直接交还给该线程在用户空间预先注册好的页错误处理函数
+
+**exokernel的upcall机制：**
+
+* 当发生页错误时，保留寄存器
+
+* 加载异常信息
+
+* 直接跳转到应用程序在“异常上下文（exception context）”中预先指定的程序计数器（PC）地址
+
+**Linux仿造exokernel的upcall机制：**
+
+使用信号处理路径signing handling将错误转发给用户态程序——使用方法：Linux信号处理机制
 
 ```c
 // 理想的纯upcall（如Exokernel）
@@ -67,7 +106,7 @@ void kernel_page_fault_handler(unsigned long fault_addr) {
 }
 ```
 
-<img src="..\..\assets\image-20250807031452975.png" alt="image-20250807031452975" style="zoom:55%;" />
+<img src="..\..\..\assets\image-20250807031452975.png" alt="image-20250807031452975" style="zoom:55%;" />
 
 * 应用程序向内核注册一个内存区域并注册upcall handler
 
@@ -91,6 +130,8 @@ void kernel_page_fault_handler(unsigned long fault_addr) {
       }
       LOG("Signal handler for signal %d registered\n", sig);
   }
+  // core layer
+  uswap_register_handler(SIGBUS);
   ```
 
     * faulting thread触发page fault，由用户态切换至内核态
@@ -99,7 +140,7 @@ void kernel_page_fault_handler(unsigned long fault_addr) {
 
     * 当faulting thread即将从内核态返回用户态时，读取待处理队列中的SIGBUS信号
 
-    * 调用`handle_signal`函数，构建信号帧 (`setup_rt_frame`)
+    * 调用` arch_do_signal_or_restart` --> `handle_signal`函数，构建信号帧 (`setup_rt_frame`)
     
       * 在故障线程的**用户态栈**上创建一个包含完整寄存器上下文和 `siginfo_t` 信息的**信号帧**
       * 修改保存在内核中的返回上下文
@@ -132,10 +173,13 @@ void kernel_page_fault_handler(unsigned long fault_addr) {
           unsafe_save_altstack(&frame->uc.uc_stack, regs->sp, Efault);
       
           /* Set up to return from userspace.  */
+          // 由内核提供的、标准的恢复函数 __kernel_rt_sigreturn
+          // __kernel_rt_sigreturn从用户态栈上拷贝回之前保存的 ucontext_t 信息，并用它来恢复所有的CPU寄存器
           restorer = current->mm->context.vdso +
               vdso_image_32.sym___kernel_rt_sigreturn;
           if (ksig->ka.sa.sa_flags & SA_RESTORER)
               restorer = ksig->ka.sa.sa_restorer;
+          // 让pretcode指向__kernel_rt_sigreturn，执行完sig handler后跳转到这里
           unsafe_put_user(restorer, &frame->pretcode, Efault);
       
           /*
@@ -144,8 +188,9 @@ void kernel_page_fault_handler(unsigned long fault_addr) {
             	 * WE DO NOT USE IT ANY MORE! It's only left here for historical
             	 * reasons and because gdb uses it as a signature to notice
             	 * signal handler stack frames.
-            	 */
+          */
           // 将完整的上下文信息（包括所有寄存器的值、siginfo_t 等）拷贝到刚刚计算出的用户态栈地址上
+          // ——在执行完sig handler后，要根据此context恢复到原先faulting thread陷入内核处
           unsafe_put_user(*((u64 *)&rt_retcode), (u64 *)frame->retcode, Efault);
           unsafe_put_sigcontext(&frame->uc.uc_mcontext, fp, regs, set, Efault);
           unsafe_put_sigmask(set, frame, Efault);
@@ -217,7 +262,6 @@ void kernel_page_fault_handler(unsigned long fault_addr) {
 跟踪内存访问，以区分经常访问（热）和不常访问（冷）数据
 
 * page fault的故障地址
-
 * MMU访问位和脏位
 
 ```c
@@ -241,6 +285,33 @@ uint64_t pt_get_bits(struct user_page *page)
   }
 ```
 
+policy layer 通过检查页面的**访问位 (Accessed Bit)** ，判断 `inactive_list` 中的页面是否应该被回收
+
+```c
+bits = pt_get_bits(page);
+...
+if ((bits & PT_ACCESSED_FLAG) == PT_ACCESSED_FLAG) {
+    // 页面被访问过，将其重新激活
+    ...
+    enqueue_fifo(&active_list, page);
+}
+else {
+    // 页面未被访问，是“冷”页面，将其放入待换出列表
+    enqueue_fifo(&eviction_list, page);
+    ...
+}
+```
+
+policy layer 通过检查页面的**脏位 (Dirty Bit)**，决定是否要将页面的内容写回磁盘
+
+```c
+flags = pt_get_bits(victim[nr_prepared]);
+...
+dirty[nr_prepared] = flags & PT_DIRTY_FLAG;
+...
+writeback[nr_prepared] = dirty[nr_prepared] | (!(victim[nr_prepared]->has_reserve));
+```
+
 * 硬件计数器
 
 ## Policy Layer
@@ -249,6 +320,123 @@ Core Layer的handler调用，能够自定义策略：识别需要驱逐或降级
 
 [ExtMem/src at master · SepehrDV2/ExtMem](https://github.com/SepehrDV2/ExtMem/tree/master/src)
 
+# upcall优化浅析
+
+* faulting thread和hamdler thread构成近似IPC机制
+
+  传统IPC：
+
+  ```
+  进程A → write(pipe_fd, data) → 内核缓冲区 → read(pipe_fd, data) → 进程B
+  ```
+
+  userfaultfd：
+
+  ```
+  故障线程 → page_fault → 内核队列 → read(uffd, msg) → handler线程
+  ```
+
+  faulting thread发生page fault后陷入内核，将错误交给 userfaultfd 处理，`uffd_msg` 被送入uffd 等待队列，faulting thread被挂起进入阻塞状态
+
+  等待handler thread将错误处理完毕后，才会将faulting thread唤醒
+
+  **upcall优化**：page fault交由引发该错误的faulting thread处理，没有handler thread（内核修改该线程自己的执行上下文，使其返回用户态时执行SIGBUS handler），不用进行IPC，减少开销
+
+* userfaultfd只有一个消息队列，无论有多少handler thread，都要对其加锁读，本质上是串行化的过程
+
+  **upcall优化**：取消消息队列，faulting thread陷入内核后 uffd 发出SIGBUS信号（说是内核发出SIGBUS信号，其实只是此时控制权在内核，而本质还是陷入内核的faulting thread）
+
+  * 因为每个线程独立，多个线程可以同时发出SIGBUS（不用竞争同一个userfaultfd的等待队列）消除了 uffd 的等待队列串行化的局限
+  * 同时，每个线程使用**独立的内核信号处理结构**处理SIGBUS信号，而不像传统的SIGBUS信号处理——同一个进程下的所有线程竞争同一个sig handler
+
+# Question
+
 * upcall原本的实现
-* EXTMEM版upcall比IPC好在哪里
-* 
+
+* Policy layer有哪些API（哪些API对应哪些功能）
+
+  * **`lrudisk_init(void)`**: 初始化API。这是策略的入口点，在程序启动时由EXTMEM核心调用一次。它负责初始化所有页面列表（如空闲DRAM列表、空闲磁盘列表）并创建和启动所有后台工作线程（kswapd、eviction worker、prefetch worker）。
+
+    **`lrudisk_pagefault(void)`**: 页错误处理API。当应用程序发生页错误需要分配一个新页面时，EXTMEM核心会调用此函数。它负责从空闲DRAM列表中提供一个可用的物理页面。
+
+    **`lrudisk_swapin_external(struct user_page \*page)`**: 页面换入API。当应用程序访问一个已经被换出到磁盘的页面时，此函数被调用。它负责处理将该页面从磁盘读回内存的逻辑。
+
+    **`lrudisk_track_page(struct user_page \*page)`**: 页面跟踪API。当一个新页面被成功映射到内存后，核心框架调用此函数，将该页面交给策略进行管理（通常是放入`inactive_list`开始LRU跟踪）。
+
+    **`lrudisk_remove_page(volatile struct user_page \*page)`**: 页面移除API。当应用程序释放一块内存时（例如调用`munmap`），此函数被调用来将对应的页面从策略的所有列表中移除，并回收其资源。
+
+    **`lrudisk_ack_vma(void\* vma_boundry, ...)`**: VMA通知API。当EXTMEM框架拦截到`mmap`系统调用时，会调用此函数来通知策略有一个新的虚拟内存区域（VMA）需要被管理。
+
+* 每个线程使用**独立的内核信号处理结构** —— 看一下claud
+
+  架构
+
+  ```c
+  // 每个进程（多线程共享）
+  struct signal_struct {
+      // 进程级信号相关数据
+      ...
+  };
+  
+  // 信号处理动作表（多线程共享）
+  struct sighand_struct {
+      atomic_t count;                        // 引用计数
+      spinlock_t siglock;                    // 保护锁（竞争点！）
+      wait_queue_head_t signalfd_wqh;       
+      struct k_sigaction action[_NSIG];      // 64个信号的处理函数表
+  };
+  
+  // 每个线程
+  struct task_struct {
+      struct signal_struct *signal;          // 指向共享的进程级信号结构
+      struct sighand_struct *sighand;        // 指向共享的信号处理表（关键！）
+      // ExtMEM新增的（关键创新！）
+      struct sighand_struct *uffd_sighand;   // 每个线程独立的结构
+      ...
+  };
+  ```
+
+  实现逻辑
+
+  ```c
+  // 简化的内核代码逻辑
+  
+  // 发送信号时
+  void send_signal_to_task(int sig, struct task_struct *task) {
+      struct sighand_struct *sighand;
+      
+      // ExtMEM添加的判断
+      if (sig == SIGBUS && is_from_userfaultfd_pagefault(task)) {
+          // 使用per-thread的独立结构（无竞争！）
+          sighand = task->uffd_sighand;
+      } else {
+          // 使用传统的共享结构（原有行为）
+          sighand = task->sighand;
+      }
+      
+      spin_lock(&sighand->siglock);  // 现在每个线程锁自己的
+      // ... 设置信号处理
+      spin_unlock(&sighand->siglock);
+  }
+  ```
+
+  多个线程并行
+
+  ```
+  时间轴：
+  t1: Thread1 page_fault → 操作uffd_sighand1 → 设置handler → 执行handler
+  t1: Thread2 page_fault → 操作uffd_sighand2 → 设置handler → 执行handler
+  t1: Thread3 page_fault → 操作uffd_sighand3 → 设置handler → 执行handler
+  ```
+
+  * 为什么原本的linux每个线程不使用**独立的内核信号处理结构**
+    * POSIX标准要求同一个进程内，信号处理动作必须共享
+    * 每个进程数百个线程的情况开销大
+    * 信号触发频率低，锁竞争不明显
+
+* 在故障线程的**用户态栈**上创建的、包含完整寄存器上下文和 `siginfo_t` 信息的**信号帧**——具体哪些信息
+  * 信号本身的信息`siginfo_t`：故障地址等
+  * 线程在中断并陷入内核前的硬件状态`ucontext_t`：通用寄存器值、栈信息、信号掩码
+  * 信号处理流程控制信息：sig handler地址、信号返回码`frame->pretcode`
+  
+* 关于最后一个实验的定制策略和Compressed Sparse Row (CSR)
