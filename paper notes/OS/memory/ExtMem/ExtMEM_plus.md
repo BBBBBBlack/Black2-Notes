@@ -26,9 +26,9 @@
 
 所以，总体的问题是，当前的内存管理策略不足以应对以上说的多种硬件结构、多种应用程序的复杂情况
 
-有一种叫做userfaultfd的机制，允许将page pault转发给用户态程序处理，以实现**自定义的内存管理策略**，但这样做的开销很大，每次page fault都需要经历用户态-内核态的多次切换、故障线程与处理线程间的IPC通信成本，在高并发场景下还面临串行化瓶颈问题
-
 新的内存管理策略的开发需要涉及到大量的内核代码修改，赶不上环境的快速变化（难以跟上云计算、边缘计算、AI加速器等新兴计算环境的快速演进需求）
+
+有一种叫做userfaultfd的机制，允许将page pault转发给用户态程序处理，以实现**自定义的内存管理策略**，但这样做的开销很大，每次page fault都要面临故障线程与处理线程间的IPC通信成本，在高并发场景下还面临串行化瓶颈问题
 
 
 
@@ -58,9 +58,19 @@ Policy Layer：向用户态开放API，以实现替换、预取等内存管理�
 
 <img src="..\..\..\assets\image-20250929022220087.png" alt="image-20250929022220087" style="zoom:25%;" />
 
-core layer：每当应用程序进行内存系统调用（比如mmap、munmap、madvise），core layer拦截这些调用，记录内存状态并调用Policy Layer的策略做出决策后，通过一系列**真正的内存系统调用**与 Linux 内核进行底层交互，以执行该决策
+core layer：
 
-（内存状态”指的是 `ExtMem` 自己维护的一套数据结构，用来追踪每个内存页的详细信息）
+Extmem为了让用户能在用户态实现自定义策略，必须将page fault事件从内核态传递到用户态
+
+这一过程需要使用userfaultfd机制：
+
+
+
+当应用程序进行内存系统调用时（比如mmap、munmap、madvise），core layer拦截这些调用，将内存区域注册到userfaultfd
+
+当应用程序发生page fault时，若uffd检测出错误来自之前在mmap时，core layer注册到uffd的内存区域，则将错误转发给EXTMEM处理，再把内存管理决策权交给用户态
+
+
 
 **（syscall_interupt、libc patching——LD_PRELOAD）**
 
@@ -72,11 +82,11 @@ madvise——向内核提供关于一块内存区域未来使用模式的建议�
 
 <img src="..\..\..\assets\image-20250929022300160.png" alt="image-20250929022300160" style="zoom:25%;" />
 
-Extmem为了让用户能在用户态实现自定义策略，必须将内存页的状态从内核态传递到用户态
 
-以前的工作基于userfaultfd的机制，将page pault转发给用户态程序处理：
 
 <img src="..\..\..\assets\image-20250929022356301.png" alt="image-20250929022356301" style="zoom:25%;" />
+
+原本的userfaultfd机制是这样的：
 
 首先，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd
 
