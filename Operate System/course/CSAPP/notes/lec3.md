@@ -16,7 +16,7 @@ $$
 (-1)^s*M*2^E
 $$
 
-double 和 float 的表示：
+单精度（float in C）和双精度（double in C）的表示：
 
 <img src=".\assets\image-20250919192446979.png" alt="image-20250919192446979" style="zoom:60%;" />
 
@@ -85,3 +85,11 @@ $$
 ### 加法
 
 对齐 ➡ 相加 ➡ 对齐
+
+
+
+## 浮点数类型转换
+
+* double / float ➡ int
+* int ➡ double：如果 `int`的位数 ≤ 53 位（double 的 frac），转换时不会丢失精度
+* int ➡ float：如果 `int`的位数 ≤ 23 位（float 的 frac），转换时不会丢失精度；否则高位舍入
