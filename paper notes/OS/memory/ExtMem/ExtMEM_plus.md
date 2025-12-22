@@ -4,6 +4,8 @@
 
 首先，在google和Meta的报告中都指出内存很昂贵
 
+WSC：仓库级计算机，将一个完整的、可能包含数万台服务器的数据中心，视为一个单一的、巨大的、集成的计算系统
+
 <img src="..\..\..\assets\image-20250929021436605.png" alt="image-20250929021436605" style="zoom:25%;" />
 
 并且，各种类型的应用程序需要大量的内存
@@ -24,7 +26,9 @@ Database：混合模式（随机访问——处理大量、简短、高并发的
 
 内存分解将内存资源从计算服务器中物理分离，并通过高速网络将其汇集成一个共享资源池；服务器可以按需从远端的资源池中获取内存（解决单台服务器内存浪费或不足）
 
-另一种方法是使用加速器，用专门的硬件分担CPU在网络和存储I/O等任务上的负载（ **Intel VT-d (Virtualization Technology for Directed I/O)** 等技术允许虚拟机直接访问硬件设备（如网卡），绕过hypervisor的软件模拟层，显著降低了I/O延迟）
+另一个是加速器的使用，用专门的硬件分担CPU在网络和存储I/O等任务上的负载——内存问题更加凸显
+
+（ **Intel VT-d (Virtualization Technology for Directed I/O)** 等技术允许虚拟机直接访问硬件设备（如网卡），绕过hypervisor的软件模拟层，显著降低了I/O延迟）
 
 而内存管理策略需要针对特定的硬件，和在硬件上运行的应用程序进行定制
 
@@ -60,7 +64,13 @@ Observability Layer：负责收集用户自定义策略所需的数据
 
 <img src="..\..\..\assets\image-20250929022129963.png" alt="image-20250929022129963" style="zoom:25%;" />
 
-Policy Layer：向用户态开放API，以实现替换、预取等内存管理策略
+Policy Layer：向用户态提供API，以实现替换、预取等内存管理策略
+
+​	页错误处理API：当应用程序发生页错误需要分配一个新页面时，从空闲DRAM列表中提供一个可用的物理页面
+
+​	页面换入API：当应用程序访问一个已经被换出到磁盘的页面时，此函数被调用
+
+​	页面跟踪API：当一个新页面被成功映射到内存后，将该页面交给策略进行管理
 
 <img src="..\..\..\assets\image-20250929022220087.png" alt="image-20250929022220087" style="zoom:25%;" />
 
@@ -72,7 +82,9 @@ Extmem为了让用户能在用户态实现自定义策略，必须将page fault�
 
 
 
-当应用程序进行内存系统调用时（比如mmap、munmap、madvise），core layer拦截这些调用，将内存区域注册到userfaultfd
+在应用程序调用mmap操作的时候，core layer拦截这些调用，将为其分配的内存区域注册到userfaultfd
+
+（Core Layer 调用 `userfaultfd()`，从内核获取一个代表 `userfaultfd` 服务本身的文件描述符（`uffd`），Core Layer 接着使用这个 `uffd`，通过 `ioctl` 命令，将刚刚 `mmap` 的那块内存区域**注册**到这个服务中去）
 
 当应用程序发生page fault时，若uffd检测出错误来自之前在mmap时，core layer注册到uffd的内存区域，则将错误转发给EXTMEM处理，再把内存管理决策权交给用户态
 
@@ -90,13 +102,9 @@ madvise——向内核提供关于一块内存区域未来使用模式的建议�
 
 
 
+首先运行user fault endpoint，也就是一个新的处理page fault的线程
+
 <img src="..\..\..\assets\image-20250929022356301.png" alt="image-20250929022356301" style="zoom:25%;" />
-
-原本的userfaultfd机制是这样的：
-
-首先，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd
-
-（Core Layer 调用 `userfaultfd()`，从内核获取一个代表 `userfaultfd` 服务本身的文件描述符（`uffd`），Core Layer 接着使用这个 `uffd`，通过 `ioctl` 命令，将刚刚 `mmap` 的那块内存区域**注册**到这个服务中去）
 
 此时，user fault endpoint——也就是处理page fault的线程，（通过 `poll` 系统调用）监听userfaultfd的消息队列，等待新的page fault发生
 
@@ -128,15 +136,25 @@ faulting thread和handler thread构成IPC机制
 
 <img src="..\..\..\assets\image-20250929023001191.png" alt="image-20250929023001191" style="zoom:25%;" />
 
+而Extmem的page fault处理，对原本的uffd机制进行了改进
+
+它取消了uffd中的等待队列和user fault endpoint这一用于处理page fault的用户态独立进程
+
 <img src="..\..\..\assets\image-20250929023125155.png" alt="image-20250929023125155" style="zoom:25%;" />
 
-首先，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd，同时，为该进程注册一个upcall handler
+同样的，在应用程序调用mmap操作的时候，core layer将其拦截下来，将为其分配的内存区域注册到userfaultfd，同时，还要为该线程注册一个upcall handler
 
-每当应用程序触发page fault，该fault都会转发到同一进程的用户态
+每当应用程序触发page fault，该fault被转发到uffd
+
+此时，uffd不再把错误信息送入等待队列中，而是向产生page fault的线程_faulting thread发送一个叫做SIGBUS的信号
+
+当faulting thread即将从内核态返回用户态时，读取待处理队列中的SIGBUS信号
+
+跳转到faulting thread之前注册的upcall handler
 
 <img src="..\..\..\assets\image-20250929023208170.png" alt="image-20250929023208170" style="zoom:25%;" />
 
-由upcall handler进行处理
+upcall handler会调用policy layerd API对该page fault进行处理
 
 <img src="..\..\..\assets\image-20250929023247777.png" alt="image-20250929023247777" style="zoom:25%;" />
 
